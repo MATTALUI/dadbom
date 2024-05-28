@@ -1,21 +1,25 @@
-import { hasAudioPlayer, loadAudioFile } from "./ui"
+import { setAudioFile } from "./state";
+import { disableAudioPlayerButton, addAudioPlayerIntercepts, getAudioPlayerButton, enableAudioPlayerButton } from "./ui"
 
 (async () => {
-  console.log("Eveything is running!")
-
-  if (hasAudioPlayer()) {
+  const audioPlayerButton = getAudioPlayerButton();
+  if (audioPlayerButton) {
+    disableAudioPlayerButton();
     try {
-      const audioFile = await loadAudioFile();
-      console.log("click to hear it all")
-      document.addEventListener("click", () => {
-        console.log("it's about to go down");
-
-        audioFile.play();
+      const url = "https://masterofnone-dev.s3.us-west-2.amazonaws.com/008-1+Ne.+1.mp3"
+      const audioFile = new Audio(url);
+      await new Promise((resolve, reject) => {
+        audioFile.addEventListener("canplay", () => {
+          resolve(audioFile);
+        });
+        // Add listener for audio failing to load
       });
-
+      setAudioFile(audioFile);
+      addAudioPlayerIntercepts();
     } catch (e) {
-      console.error("couldn't load audio");
       console.error(e);
+    } finally {
+      enableAudioPlayerButton();
     }
   }
 })()
