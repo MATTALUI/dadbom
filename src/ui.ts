@@ -1,9 +1,11 @@
 import { pause, play } from "./icons";
 import { getAudioFile } from "./state";
+import { formatSeconds } from "./time";
 
 const AUDIO_PLAYER_BUTTON_SELECTOR = "button[aria-label='Audio Player']";
 const CLOSE_PLAYER_BUTTON_SELECTOR = "button[aria-label='Close']";
 const PLAY_BUTTON_SELECTOR = "button[aria-label='Play']";
+const TIME_INPUT_SELECTOR = "input[aria-label='Percent played']";
 
 const waitForEle = async <T extends Element>(
   selector: string,
@@ -41,8 +43,47 @@ const addPlayButtonIntercepts = () => {
   });
 }
 
+const reflectAudioTimeChanges = (e: Event) => {
+  const timeInput = getTimeInput();
+  const progressBar = getProgressBar();
+  const startTime = getStartTime();
+  if (!timeInput || !progressBar || !startTime) return;
+  const audioFile = e.target as HTMLAudioElement;
+  const time = audioFile.currentTime;
+  const duration = audioFile.duration;
+  const completionPct = ((time / duration) * 100).toFixed(2);
+  timeInput.value = completionPct;
+  progressBar.style.width = `${completionPct}%`;
+  startTime.innerHTML = formatSeconds(time);
+}
+
 export const getPlayButton = (): HTMLDivElement | null => {
   return document.querySelector(PLAY_BUTTON_SELECTOR);
+}
+
+export const getTimeInput = (): HTMLInputElement | null => {
+  return document.querySelector(TIME_INPUT_SELECTOR);
+}
+
+export const getProgressBar = (): HTMLDivElement | null => {
+  const timeInput = getTimeInput();
+  const progressBar = timeInput?.parentElement?.children[2];
+  if (!progressBar) return null;
+  return progressBar as HTMLDivElement;
+}
+
+export const getStartTime = (): HTMLSpanElement | null => {
+  const timeInput = getTimeInput();
+  const startTime = timeInput?.parentElement?.parentElement?.children[0];
+  if (!startTime) return null;
+  return startTime as HTMLSpanElement;
+}
+
+export const getEndTime = (): HTMLSpanElement | null => {
+  const timeInput = getTimeInput();
+  const endTime = timeInput?.parentElement?.parentElement?.children[2];
+  if (!endTime) return null;
+  return endTime as HTMLSpanElement;
 }
 
 export const getAudioPlayerButton = (): HTMLDivElement | null => {
@@ -58,6 +99,7 @@ export const enableAudioPlayerButton = () => {
 }
 
 export const addAudioPlayerIntercepts = () => {
+  const audioFile = getAudioFile();
   const audioPlayerButton = getAudioPlayerButton();
   if (!audioPlayerButton) return;
   audioPlayerButton.addEventListener("click", async () => {
@@ -70,9 +112,14 @@ export const addAudioPlayerIntercepts = () => {
       audioFile.currentTime = 0;
       await waitForEle(AUDIO_PLAYER_BUTTON_SELECTOR);
       addAudioPlayerIntercepts();
+      audioFile.removeEventListener("timeupdate", reflectAudioTimeChanges);
     });
     // Add the intercept for the playbutton
-    removePlayButtonListeners()
+    removePlayButtonListeners();
     addPlayButtonIntercepts();
+    // Listen for time changes
+    audioFile.addEventListener("timeupdate", reflectAudioTimeChanges);
+    const endTime = getEndTime();
+    if (endTime) endTime.innerHTML = formatSeconds(audioFile.duration);
   });
 }
