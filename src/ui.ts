@@ -1,3 +1,4 @@
+import { pause, play } from "./icons";
 import { getAudioFile } from "./state";
 
 const AUDIO_PLAYER_BUTTON_SELECTOR = "button[aria-label='Audio Player']";
@@ -30,7 +31,13 @@ const addPlayButtonIntercepts = () => {
   if (!playButton) return;
   playButton.addEventListener("click", () => {
     const audioFile = getAudioFile();
-    audioFile.play();
+    if (audioFile.paused) {
+      audioFile.play();
+      playButton.innerHTML = pause;
+    } else {
+      audioFile.pause();
+      playButton.innerHTML = play;
+    }
   });
 }
 
