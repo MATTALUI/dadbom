@@ -3,7 +3,8 @@
   "module": "index.ts",
   "type": "module",
   "scripts": {
-    "build": "rm -rf dist && mkdir -p dist && cp -r static/* dist && bun build src --outfile=dist/index.js --minify"
+    "build": "rm -rf dist && mkdir -p dist && cp -r static/* dist && bun build src --outfile=dist/index.js --minify",
+    "clean": "go run cleaner/clean.go"
   },
   "devDependencies": {
     "@types/bun": "latest"
