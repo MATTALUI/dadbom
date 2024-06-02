@@ -49,8 +49,9 @@ const (
 )
 
 var (
-	DB_WRITER          csv.Writer
-	DB_READER          csv.Reader
+	DB_CREATED         bool
+	DB_WRITER          *csv.Writer
+	DB_READER          *csv.Reader
 	ROW_REGISTRY       map[string]*BomRow
 	ENV                map[string]string
 	DOLBY_BEARER_TOKEN string
@@ -60,6 +61,7 @@ func init() {
 	fmt.Println("Initializing the cleaner")
 	initializeEnv()
 	initializeFileDependencies()
+	initializeDB()
 	initializeDolbyAuth()
 }
 
@@ -113,9 +115,22 @@ func initializeFileDependencies() {
 	// make sure that there is a CSV DB
 	_, err := os.Stat(db_path)
 	if errors.Is(err, os.ErrNotExist) {
+		DB_CREATED = true
 		os.Create(db_path)
-		writer := getDBWriter()
-		defer writer.Flush()
+	}
+}
+
+func initializeDB() {
+	db_path := path.Join(BOM_DIR, OUT_DIR, DB_FILENAME)
+	file, err := os.OpenFile(db_path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0644)
+	if err != nil {
+		panic("Trying to write to a DB that has not been initialized")
+	}
+
+	DB_WRITER = csv.NewWriter(file)
+
+	if DB_CREATED {
+		defer DB_WRITER.Flush()
 		header := []string{
 			"Original Path",
 			"Dolby In File",
@@ -123,8 +138,9 @@ func initializeFileDependencies() {
 			"Final Path",
 			"Status",
 		}
-		writer.Write(header)
+		DB_WRITER.Write(header)
 	}
+	// Add reader here
 }
 
 func initializeDolbyAuth() {
@@ -183,25 +199,15 @@ func ensureProcessingValidity(filesToProcess []string) {
 	// Panic if any files in the list are already marked as complete
 }
 
-func getDBWriter() *csv.Writer {
-	db_path := path.Join(BOM_DIR, OUT_DIR, DB_FILENAME)
-	file, err := os.OpenFile(db_path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0644)
-	if err != nil {
-		panic("Trying to write to a DB that has not been initialized")
-	}
+// func getDBReader() *csv.Reader {
+// 	db_path := path.Join(BOM_DIR, OUT_DIR, DB_FILENAME)
+// 	file, err := os.OpenFile(db_path, os.O_RDONLY, 777)
+// 	if err != nil {
+// 		panic("Trying to read a DB that has not been initialized")
+// 	}
 
-	return csv.NewWriter(file)
-}
-
-func getDBReader() *csv.Reader {
-	db_path := path.Join(BOM_DIR, OUT_DIR, DB_FILENAME)
-	file, err := os.OpenFile(db_path, os.O_RDONLY, 777)
-	if err != nil {
-		panic("Trying to read a DB that has not been initialized")
-	}
-
-	return csv.NewReader(file)
-}
+// 	return csv.NewReader(file)
+// }
 
 func initRowObjects(filesToProcess []string) []*BomRow {
 	rowObjects := make([]*BomRow, 0)
@@ -220,7 +226,7 @@ func initRowObjects(filesToProcess []string) []*BomRow {
 	return rowObjects
 }
 
-func convertObjectsToRow(rowObj *BomRow) []string {
+func convertObjectToRow(rowObj *BomRow) []string {
 	row := make([]string, ROW_SIZE)
 
 	row[OG_PATH_INDEX] = rowObj.OGPath
@@ -241,10 +247,8 @@ func processAudioFile(rows []*BomRow, index int, wg *sync.WaitGroup) {
 }
 
 func writeProcessingUpdates(rows []*BomRow) {
-	writer := getDBWriter()
-	defer writer.Flush()
-
+	defer DB_WRITER.Flush()
 	for _, row := range rows {
-		writer.Write(convertObjectsToRow(row))
+		DB_WRITER.Write(convertObjectToRow(row))
 	}
 }
