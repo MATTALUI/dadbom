@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"strings"
@@ -240,7 +241,8 @@ func convertObjectToRow(rowObj *BomRow) []string {
 
 func processAudioFile(rows []*BomRow, index int, wg *sync.WaitGroup) {
 	defer wg.Done()
-	// create dolby input file
+	record := rows[index]
+	createDolbyInputFile(record)
 	// make the enhancement request
 	// poll for completion
 	// download file
@@ -249,6 +251,73 @@ func processAudioFile(rows []*BomRow, index int, wg *sync.WaitGroup) {
 func writeProcessingUpdates(rows []*BomRow) {
 	defer DB_WRITER.Flush()
 	for _, row := range rows {
-		DB_WRITER.Write(convertObjectToRow(row))
+		rowData := convertObjectToRow(row)
+		fmt.Println("WRITING:", rowData)
+		DB_WRITER.Write(rowData)
 	}
+}
+
+func createDolbyInputFile(record *BomRow) {
+	client := &http.Client{}
+	// Send the first request to register a private media input url
+	record.DolbyIn = fmt.Sprintf("dlb://in/%s.mp3", "cats") // can be whatever we want
+	rawBody := map[string]string{"url": record.DolbyIn}
+	bodyBytes, _ := json.Marshal(rawBody)
+	request, err := http.NewRequest("POST", "https://api.dolby.com/media/input", strings.NewReader(string(bodyBytes)))
+	if err != nil {
+		record.Status = STATUS_FAILURE
+		return
+	}
+	request.Header.Add("Accept", "application/json")
+	request.Header.Add("Content-Type", "application/json")
+	request.Header.Add("Authorization", fmt.Sprintf("Bearer %s", DOLBY_BEARER_TOKEN))
+	response, err := client.Do(request)
+	if err != nil {
+		record.Status = STATUS_FAILURE
+		return
+	}
+
+	// Get the presigned upload endpoint from the response
+	bytes, err := ioutil.ReadAll(response.Body)
+	if err != nil {
+		record.Status = STATUS_FAILURE
+		return
+	}
+	presignedResponse := DolbyPresignedUrlResponse{}
+	json.Unmarshal(bytes, &presignedResponse)
+
+	// Upload the actual file to the presigned endpoint
+
+	// For some reason I'm getting different results from a direct request and
+	// using CURL even though headers are the same. Instead of debugging I'm
+	// just doing this for now
+	cmd := exec.Command("curl", "-X", "PUT", presignedResponse.Url, "-T", record.OGPath)
+	err = cmd.Run()
+	if err != nil {
+		record.Status = STATUS_FAILURE
+		return
+	}
+
+	// The real way fo doing things
+
+	// stats, err := os.Stat(record.OGPath)
+	// if err != nil {
+	// 	record.Status = STATUS_FAILURE
+	// 	return
+	// }
+	// uploadFile, err := os.Open(record.OGPath)
+	// fileUploadRequest, err := http.NewRequest("PUT", presignedResponse.Url, uploadFile)
+	// if err != nil {
+	// 	record.Status = STATUS_FAILURE
+	// 	return
+	// }
+	// fileUploadRequest.Header.Add("Content-Type", "application/octet-stream")
+	// fileUploadRequest.Header.Add("Content-Length", strconv.Itoa(int(stats.Size())))
+	// fileUploadRequest.Header.Add("Accept", "*/*")
+	// uploadResponse, err := client.Do(fileUploadRequest)
+	// if err != nil {
+	// 	record.Status = STATUS_FAILURE
+	// 	return
+	// }
+	// b, _ := ioutil.ReadAll(uploadResponse.Body)
 }
