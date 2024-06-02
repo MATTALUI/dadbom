@@ -1,12 +1,18 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/csv"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io/ioutil"
+	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -16,6 +22,10 @@ type BomRow struct {
 	DolbyOut  string
 	FinalPath string
 	Status    string
+}
+
+type DolbyAuthResponse struct {
+	AccessToken string `json:"access_token"`
 }
 
 const (
@@ -39,13 +49,17 @@ const (
 )
 
 var (
-	DB_WRITER    csv.Writer
-	DB_READER    csv.Reader
-	ROW_REGISTRY map[string]*BomRow
+	DB_WRITER          csv.Writer
+	DB_READER          csv.Reader
+	ROW_REGISTRY       map[string]*BomRow
+	ENV                map[string]string
+	DOLBY_BEARER_TOKEN string
 )
 
 func init() {
-	initializeDependencies()
+	fmt.Println("Initializing the cleaner")
+	initializeEnv()
+	initializeFileDependencies()
 	initializeDolbyAuth()
 }
 
@@ -63,7 +77,35 @@ func main() {
 	writeProcessingUpdates(rowObjects)
 }
 
-func initializeDependencies() {
+func initializeEnv() {
+	ENV = make(map[string]string)
+	// There are packages that will load an env from an env file, but I don't
+	// want any dependencies. This is easy enough for what I want to do.
+	file, err := os.Open("./.env")
+	if err != nil {
+		fmt.Println("no env file found")
+		return
+	}
+	defer file.Close()
+	bytes, err := ioutil.ReadAll(file)
+	if err != nil {
+		return
+	}
+	content := string(bytes)
+	lines := strings.Split(content, "\n")
+	if len(lines) == 0 {
+		return
+	}
+
+	for _, line := range strings.Split(content, "\n") {
+		data := strings.SplitN(line, "=", 2)
+		if len(data) == 2 {
+			ENV[data[0]] = data[1]
+		}
+	}
+}
+
+func initializeFileDependencies() {
 	dir_path := path.Join(BOM_DIR, OUT_DIR)
 	db_path := path.Join(dir_path, DB_FILENAME)
 	// make sure there is an output directory
@@ -86,7 +128,45 @@ func initializeDependencies() {
 }
 
 func initializeDolbyAuth() {
-
+	if ENV["DOLBY_APP_SECRET"] == "" || ENV["DOLBY_APP_KEY"] == "" {
+		panic("Missing required Dolby API secrets")
+	}
+	file, err := os.Open("./.bearertoken")
+	if errors.Is(err, os.ErrNotExist) {
+		rawAuth := fmt.Sprintf("%s:%s", ENV["DOLBY_APP_KEY"], ENV["DOLBY_APP_SECRET"])
+		auth := base64.StdEncoding.EncodeToString([]byte(rawAuth))
+		body := url.Values{
+			"grant_type": {"client_credentials"},
+			"expires_in": {"1800"},
+		}
+		request, err := http.NewRequest("POST", "https://api.dolby.io/v1/auth/token", strings.NewReader(body.Encode()))
+		if err != nil {
+			panic(err)
+		}
+		request.Header.Add("Accept", "application/json")
+		request.Header.Add("Content-Type", "application/x-www-form-urlencoded")
+		request.Header.Add("Authorization", fmt.Sprintf("Basic %s", auth))
+		client := &http.Client{}
+		response, err := client.Do(request)
+		if err != nil {
+			panic(err)
+		}
+		bytes, err := ioutil.ReadAll(response.Body)
+		if err != nil {
+			panic(err)
+		}
+		data := DolbyAuthResponse{}
+		json.Unmarshal(bytes, &data)
+		DOLBY_BEARER_TOKEN = data.AccessToken
+		// Write it to the file for later
+		ioutil.WriteFile("./.bearertoken", []byte(DOLBY_BEARER_TOKEN), 777)
+		return
+	} else if err != nil {
+		panic(err)
+	}
+	defer file.Close()
+	bytes, _ := ioutil.ReadAll(file)
+	DOLBY_BEARER_TOKEN = string(bytes)
 }
 
 func getNextFilesToProcess() []string {
