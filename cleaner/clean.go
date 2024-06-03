@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io/ioutil"
+	"math/rand"
 	"net/http"
 	"net/url"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 )
 
 type BomRow struct {
@@ -50,12 +52,19 @@ type DoblyEnhanceResponse struct {
 	JobId string `json:"job_id"`
 }
 
+type DolbyJobPollResponse struct {
+	Path     string `json:"path"`
+	Status   string `json:"status"`
+	Progress int    `json:"progress"`
+}
+
 const (
 	// General Config
-	BATCH_SIZE  = 1
-	BOM_DIR     = "/Users/mattalui/Music/BOM"
-	OUT_DIR     = "out"
-	DB_FILENAME = "status.csv"
+	BATCH_SIZE       = 1
+	BOM_DIR          = "/Users/mattalui/Music/BOM"
+	OUT_DIR          = "out"
+	DB_FILENAME      = "status.csv"
+	POLL_TIMEOUT_MIN = 10
 	// Statuses
 	STATUS_NEW      = "new"
 	STATUS_PENDING  = "pending"
@@ -271,6 +280,7 @@ func processAudioFile(rows []*BomRow, index int, wg *sync.WaitGroup) {
 	record := rows[index]
 	createDolbyInputFile(record)
 	makeDolbyEnhancementRequest(record)
+	pollforDolbyJobCompletion(record)
 	// make the enhancement request
 	// poll for completion
 	// download file
@@ -412,6 +422,74 @@ func makeDolbyEnhancementRequest(record *BomRow) {
 		return
 	}
 	record.DolbyJobId = dolbyResponse.JobId
+	record.Status = STATUS_PENDING
+}
+
+func pollforDolbyJobCompletion(record *BomRow) {
+	if record.Status != STATUS_PENDING {
+		record.Status = STATUS_FAILURE
+		if record.Error == "" {
+			record.Error = "Trying to poll for Dolby enhancement job without a pending status"
+		}
+
+	}
+	if record.Status == STATUS_FAILURE {
+		return
+	}
+	client := &http.Client{}
+	startTime := time.Now()
+	for {
+		if time.Since(startTime) >= POLL_TIMEOUT_MIN*time.Minute {
+			record.Status = STATUS_FAILURE
+			record.Error = "Timout while polling for dolby job completion"
+			return
+		}
+
+		rawBody := map[string]string{"job_id": record.DolbyJobId}
+		bodyBytes, err := json.Marshal(rawBody)
+		if err != nil {
+			record.Error = "Failure to marshal poll request body to json"
+			record.Status = STATUS_FAILURE
+			return
+		}
+		request, err := http.NewRequest("GET", "https://api.dolby.com/media/enhance", strings.NewReader(string(bodyBytes)))
+		if err != nil {
+			record.Status = STATUS_FAILURE
+			record.Error = "Unable to create polling request"
+			return
+		}
+		request.Header.Add("Accept", "application/json")
+		request.Header.Add("Content-Type", "application/json")
+		request.Header.Add("Authorization", fmt.Sprintf("Bearer %s", DOLBY_BEARER_TOKEN))
+		response, err := client.Do(request)
+		if err != nil {
+			record.Status = STATUS_FAILURE
+			record.Error = "Unknown error sending polling request"
+			return
+		}
+		if response.StatusCode != 200 {
+			record.Status = STATUS_FAILURE
+			record.Error = "Non-200 status for polling request"
+			return
+		}
+		responseBytes, err := ioutil.ReadAll(response.Body)
+		if err != nil {
+			record.Status = STATUS_FAILURE
+			record.Error = "Error reading response body of polling request"
+			return
+		}
+		job := DolbyJobPollResponse{}
+		json.Unmarshal(responseBytes, &job)
+
+		jobIsComplete := job.Progress >= 100
+		if jobIsComplete {
+			fmt.Println("FINISHED: Dolby enhance job has completed")
+			return
+		} else {
+			sleepTime := rand.Intn(10) + 1
+			time.Sleep(time.Duration(sleepTime) * time.Second)
+		}
+	}
 }
 
 func sanitizeBaseName(fpath string) string {
