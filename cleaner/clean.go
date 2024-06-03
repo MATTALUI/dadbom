@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 )
@@ -258,9 +259,10 @@ func writeProcessingUpdates(rows []*BomRow) {
 }
 
 func createDolbyInputFile(record *BomRow) {
+	fname := sanitizeBaseName(record.OGPath)
 	client := &http.Client{}
 	// Send the first request to register a private media input url
-	record.DolbyIn = fmt.Sprintf("dlb://in/%s.mp3", "cats") // can be whatever we want
+	record.DolbyIn = fmt.Sprintf("dlb://in/%s.mp3", fname) // can be whatever we want
 	rawBody := map[string]string{"url": record.DolbyIn}
 	bodyBytes, _ := json.Marshal(rawBody)
 	request, err := http.NewRequest("POST", "https://api.dolby.com/media/input", strings.NewReader(string(bodyBytes)))
@@ -320,4 +322,9 @@ func createDolbyInputFile(record *BomRow) {
 	// 	return
 	// }
 	// b, _ := ioutil.ReadAll(uploadResponse.Body)
+}
+
+func sanitizeBaseName(fpath string) string {
+	re := regexp.MustCompile("[^\\w.-]|.mp3")
+	return re.ReplaceAllString(path.Base(fpath), "")
 }
