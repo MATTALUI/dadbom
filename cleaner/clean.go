@@ -19,20 +19,40 @@ import (
 )
 
 type BomRow struct {
-	OGPath    string
-	DolbyIn   string
-	DolbyOut  string
-	FinalPath string
-	Status    string
+	OGPath     string
+	DolbyIn    string
+	DolbyOut   string
+	DolbyJobId string
+	FinalPath  string
+	Status     string
+	Error      string
 }
 
 type DolbyAuthResponse struct {
 	AccessToken string `json:"access_token"`
 }
 
+type DolbyPresignedUrlResponse struct {
+	Url string `json:"url"`
+}
+
+type DolbyEnhanceContent struct {
+	Type string `json:"type"`
+}
+
+type DolbyEnhanceRequestBody struct {
+	Input   string              `json:"input"`
+	Output  string              `json:"output"`
+	Content DolbyEnhanceContent `json:"content"`
+}
+
+type DoblyEnhanceResponse struct {
+	JobId string `json:"job_id"`
+}
+
 const (
 	// General Config
-	BATCH_SIZE  = 10
+	BATCH_SIZE  = 1
 	BOM_DIR     = "/Users/mattalui/Music/BOM"
 	OUT_DIR     = "out"
 	DB_FILENAME = "status.csv"
@@ -42,12 +62,14 @@ const (
 	STATUS_FAILURE  = "failure"
 	STATUS_COMPLETE = "complete"
 	// Row Indices
-	ROW_SIZE         = 5
-	OG_PATH_INDEX    = 0
-	DOLBY_IN_INDEX   = 1
-	DOLBY_OUT_INDEX  = 2
-	FINAL_PATH_INDEX = 3
-	STATUS_INDEX     = 4
+	ROW_SIZE              = 7
+	OG_PATH_INDEX         = 0
+	DOLBY_IN_INDEX        = 1
+	DOLBY_OUT_INDEX       = 2
+	DOLBY_JOB_INDEX_INDEX = 3
+	FINAL_PATH_INDEX      = 4
+	STATUS_INDEX          = 5
+	ERROR_INDEX           = 6
 )
 
 var (
@@ -137,8 +159,10 @@ func initializeDB() {
 			"Original Path",
 			"Dolby In File",
 			"Dolby Out File",
+			"Dolby Enhance Job Id",
 			"Final Path",
 			"Status",
+			"Error",
 		}
 		DB_WRITER.Write(header)
 	}
@@ -234,8 +258,10 @@ func convertObjectToRow(rowObj *BomRow) []string {
 	row[OG_PATH_INDEX] = rowObj.OGPath
 	row[DOLBY_IN_INDEX] = rowObj.DolbyIn
 	row[DOLBY_OUT_INDEX] = rowObj.DolbyOut
+	row[DOLBY_JOB_INDEX_INDEX] = rowObj.DolbyJobId
 	row[FINAL_PATH_INDEX] = rowObj.FinalPath
 	row[STATUS_INDEX] = rowObj.Status
+	row[ERROR_INDEX] = rowObj.Error
 
 	return row
 }
@@ -244,6 +270,7 @@ func processAudioFile(rows []*BomRow, index int, wg *sync.WaitGroup) {
 	defer wg.Done()
 	record := rows[index]
 	createDolbyInputFile(record)
+	makeDolbyEnhancementRequest(record)
 	// make the enhancement request
 	// poll for completion
 	// download file
@@ -268,6 +295,7 @@ func createDolbyInputFile(record *BomRow) {
 	request, err := http.NewRequest("POST", "https://api.dolby.com/media/input", strings.NewReader(string(bodyBytes)))
 	if err != nil {
 		record.Status = STATUS_FAILURE
+		record.Error = "Unable to build media input request"
 		return
 	}
 	request.Header.Add("Accept", "application/json")
@@ -276,6 +304,12 @@ func createDolbyInputFile(record *BomRow) {
 	response, err := client.Do(request)
 	if err != nil {
 		record.Status = STATUS_FAILURE
+		record.Error = "Unknown media input response error"
+		return
+	}
+	if response.StatusCode != 200 {
+		record.Status = STATUS_FAILURE
+		record.Error = "Non-200 response for media input creation request"
 		return
 	}
 
@@ -283,6 +317,7 @@ func createDolbyInputFile(record *BomRow) {
 	bytes, err := ioutil.ReadAll(response.Body)
 	if err != nil {
 		record.Status = STATUS_FAILURE
+		record.Error = "Unable to read presigned response body"
 		return
 	}
 	presignedResponse := DolbyPresignedUrlResponse{}
@@ -297,6 +332,7 @@ func createDolbyInputFile(record *BomRow) {
 	err = cmd.Run()
 	if err != nil {
 		record.Status = STATUS_FAILURE
+		record.Error = "Error executing PUT curl"
 		return
 	}
 
@@ -322,6 +358,60 @@ func createDolbyInputFile(record *BomRow) {
 	// 	return
 	// }
 	// b, _ := ioutil.ReadAll(uploadResponse.Body)
+}
+
+func makeDolbyEnhancementRequest(record *BomRow) {
+	if record.Status == STATUS_FAILURE {
+		return
+	}
+	fname := sanitizeBaseName(record.OGPath)
+	client := &http.Client{}
+
+	record.DolbyOut = fmt.Sprintf("dlb://out/%s.mp3", fname) // can be whatever we want
+	rawBody := DolbyEnhanceRequestBody{}
+	rawBody.Input = record.DolbyIn
+	rawBody.Output = record.DolbyOut
+	rawBody.Content.Type = "studio"
+	bodyBytes, err := json.Marshal(rawBody)
+	if err != nil {
+		record.Status = STATUS_FAILURE
+		record.Error = "Error converting enhance request body to bytes"
+		return
+	}
+	request, err := http.NewRequest("POST", "https://api.dolby.com/media/enhance", strings.NewReader(string(bodyBytes)))
+	if err != nil {
+		record.Status = STATUS_FAILURE
+		record.Error = "Error creating enhance request"
+		return
+	}
+	request.Header.Add("Accept", "application/json")
+	request.Header.Add("Content-Type", "application/json")
+	request.Header.Add("Authorization", fmt.Sprintf("Bearer %s", DOLBY_BEARER_TOKEN))
+	response, err := client.Do(request)
+	if err != nil {
+		record.Status = STATUS_FAILURE
+		record.Error = "Unknown error in enhance request"
+		return
+	}
+	if response.StatusCode != 200 {
+		record.Status = STATUS_FAILURE
+		record.Error = "Non-200 response code on enhancement request"
+		return
+	}
+	responseBytes, err := ioutil.ReadAll(response.Body)
+	if err != nil {
+		record.Status = STATUS_FAILURE
+		record.Error = "Error reading bytes from enhancement response body"
+		return
+	}
+	dolbyResponse := DoblyEnhanceResponse{}
+	json.Unmarshal(responseBytes, &dolbyResponse)
+	if dolbyResponse.JobId == "" {
+		record.Status = STATUS_FAILURE
+		record.Error = "Empty job Id in enhance response"
+		return
+	}
+	record.DolbyJobId = dolbyResponse.JobId
 }
 
 func sanitizeBaseName(fpath string) string {
