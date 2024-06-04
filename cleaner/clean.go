@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"math/rand"
 	"net/http"
@@ -60,11 +61,11 @@ type DolbyJobPollResponse struct {
 
 const (
 	// General Config
-	BATCH_SIZE       = 1
+	BATCH_SIZE       = 10
 	BOM_DIR          = "/Users/mattalui/Music/BOM"
 	OUT_DIR          = "out"
 	DB_FILENAME      = "status.csv"
-	POLL_TIMEOUT_MIN = 10
+	POLL_TIMEOUT_MIN = 15
 	// Statuses
 	STATUS_NEW      = "new"
 	STATUS_PENDING  = "pending"
@@ -210,7 +211,7 @@ func initializeDolbyAuth() {
 		json.Unmarshal(bytes, &data)
 		DOLBY_BEARER_TOKEN = data.AccessToken
 		// Write it to the file for later
-		ioutil.WriteFile("./.bearertoken", []byte(DOLBY_BEARER_TOKEN), 777)
+		// ioutil.WriteFile("./.bearertoken", []byte(DOLBY_BEARER_TOKEN), 777)
 		return
 	} else if err != nil {
 		panic(err)
@@ -281,18 +282,22 @@ func processAudioFile(rows []*BomRow, index int, wg *sync.WaitGroup) {
 	createDolbyInputFile(record)
 	makeDolbyEnhancementRequest(record)
 	pollforDolbyJobCompletion(record)
-	// make the enhancement request
-	// poll for completion
-	// download file
+	downloadEnhancedFile(record)
 }
 
 func writeProcessingUpdates(rows []*BomRow) {
+	failures := 0
 	defer DB_WRITER.Flush()
 	for _, row := range rows {
+		if row.Status != STATUS_COMPLETE {
+			failures++
+		}
 		rowData := convertObjectToRow(row)
 		fmt.Println("WRITING:", rowData)
 		DB_WRITER.Write(rowData)
 	}
+	fmt.Println()
+	fmt.Println(fmt.Sprintf("Non-completions: %d/%d", failures, BATCH_SIZE))
 }
 
 func createDolbyInputFile(record *BomRow) {
@@ -300,6 +305,7 @@ func createDolbyInputFile(record *BomRow) {
 	client := &http.Client{}
 	// Send the first request to register a private media input url
 	record.DolbyIn = fmt.Sprintf("dlb://in/%s.mp3", fname) // can be whatever we want
+	fmt.Println(fmt.Sprintf("CREATE: input file %s", record.DolbyIn))
 	rawBody := map[string]string{"url": record.DolbyIn}
 	bodyBytes, _ := json.Marshal(rawBody)
 	request, err := http.NewRequest("POST", "https://api.dolby.com/media/input", strings.NewReader(string(bodyBytes)))
@@ -378,6 +384,7 @@ func makeDolbyEnhancementRequest(record *BomRow) {
 	client := &http.Client{}
 
 	record.DolbyOut = fmt.Sprintf("dlb://out/%s.mp3", fname) // can be whatever we want
+	fmt.Println(fmt.Sprintf("ENHANCE: output file %s", record.DolbyOut))
 	rawBody := DolbyEnhanceRequestBody{}
 	rawBody.Input = record.DolbyIn
 	rawBody.Output = record.DolbyOut
@@ -444,22 +451,16 @@ func pollforDolbyJobCompletion(record *BomRow) {
 			record.Error = "Timout while polling for dolby job completion"
 			return
 		}
-
-		rawBody := map[string]string{"job_id": record.DolbyJobId}
-		bodyBytes, err := json.Marshal(rawBody)
-		if err != nil {
-			record.Error = "Failure to marshal poll request body to json"
-			record.Status = STATUS_FAILURE
-			return
-		}
-		request, err := http.NewRequest("GET", "https://api.dolby.com/media/enhance", strings.NewReader(string(bodyBytes)))
+		request, err := http.NewRequest(
+			"GET",
+			fmt.Sprintf("https://api.dolby.com/media/enhance?job_id=%s", record.DolbyJobId),
+			nil,
+		)
 		if err != nil {
 			record.Status = STATUS_FAILURE
 			record.Error = "Unable to create polling request"
 			return
 		}
-		request.Header.Add("Accept", "application/json")
-		request.Header.Add("Content-Type", "application/json")
 		request.Header.Add("Authorization", fmt.Sprintf("Bearer %s", DOLBY_BEARER_TOKEN))
 		response, err := client.Do(request)
 		if err != nil {
@@ -480,6 +481,7 @@ func pollforDolbyJobCompletion(record *BomRow) {
 		}
 		job := DolbyJobPollResponse{}
 		json.Unmarshal(responseBytes, &job)
+		fmt.Println(fmt.Sprintf("POLLING: %s %d", record.DolbyJobId, job.Progress))
 
 		jobIsComplete := job.Progress >= 100
 		if jobIsComplete {
@@ -490,6 +492,52 @@ func pollforDolbyJobCompletion(record *BomRow) {
 			time.Sleep(time.Duration(sleepTime) * time.Second)
 		}
 	}
+}
+
+func downloadEnhancedFile(record *BomRow) {
+	if record.Status == STATUS_FAILURE {
+		return
+	}
+	fmt.Println(fmt.Sprintf("DOWNLOAD: target file %s", record.DolbyOut))
+	request, err := http.NewRequest(
+		"GET",
+		fmt.Sprintf("https://api.dolby.com/media/output?url=%s", record.DolbyOut),
+		nil,
+	)
+	if err != nil {
+		record.Status = STATUS_FAILURE
+		record.Error = "Unable to create polling request"
+		return
+	}
+	request.Header.Add("Authorization", fmt.Sprintf("Bearer %s", DOLBY_BEARER_TOKEN))
+	client := &http.Client{}
+	response, err := client.Do(request)
+	if err != nil {
+		record.Error = "Error sending file download request"
+		record.Status = STATUS_FAILURE
+		return
+	}
+	if response.StatusCode != 200 {
+		fmt.Println(response.Status)
+		record.Error = "non-200 response code for download request"
+		record.Status = STATUS_FAILURE
+		return
+	}
+	outFilePath := path.Join(BOM_DIR, OUT_DIR, sanitizeBaseName(record.OGPath)) + ".mp3"
+	outputFile, err := os.Create(outFilePath)
+	if err != nil {
+		record.Error = "Error creating output file"
+		record.Status = STATUS_FAILURE
+		return
+	}
+	_, err = io.Copy(outputFile, response.Body)
+	if err != nil {
+		record.Error = "Error Error copying file to destination"
+		record.Status = STATUS_FAILURE
+		return
+	}
+	record.Status = STATUS_COMPLETE
+	fmt.Println("SAVED: ", outFilePath)
 }
 
 func sanitizeBaseName(fpath string) string {
