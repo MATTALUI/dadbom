@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"math"
 	"math/rand"
 	"net/http"
 	"net/url"
@@ -101,7 +102,8 @@ func init() {
 
 func main() {
 	fmt.Println(fmt.Sprintf("Cleaning the next %d audio files", BATCH_SIZE))
-	filesToProcess := getNextFilesToProcess()
+	// filesToProcess := getNextFilesToProcess()
+	filesToProcess := getMissedFiles()
 	ensureProcessingValidity(filesToProcess)
 	rowObjects := initRowObjects(filesToProcess)
 	var wg sync.WaitGroup
@@ -227,23 +229,29 @@ func getNextFilesToProcess() []string {
 	originalFiles, _ := filepath.Glob(path.Join(BOM_DIR, "*.mp3"))
 	outFiles, _ := filepath.Glob(path.Join(BOM_DIR, OUT_DIR, "*.mp3"))
 	outCount := len(outFiles)
+	nextIndex := int(math.Min(float64(outCount+BATCH_SIZE), float64(len(originalFiles)-1)))
 
-	return originalFiles[outCount : outCount+BATCH_SIZE]
+	return originalFiles[outCount:nextIndex]
+}
+
+func getMissedFiles() []string {
+	missed := make([]string, 0)
+
+	inFiles, _ := filepath.Glob(path.Join(BOM_DIR, "*.mp3"))
+	for _, in := range inFiles {
+		expectedOut := path.Join(BOM_DIR, OUT_DIR, sanitizeBaseName(in)) + ".mp3"
+		_, err := os.Stat(expectedOut)
+		if errors.Is(err, os.ErrNotExist) {
+			missed = append(missed, in)
+		}
+	}
+
+	return missed
 }
 
 func ensureProcessingValidity(filesToProcess []string) {
 	// Panic if any files in the list are already marked as complete
 }
-
-// func getDBReader() *csv.Reader {
-// 	db_path := path.Join(BOM_DIR, OUT_DIR, DB_FILENAME)
-// 	file, err := os.OpenFile(db_path, os.O_RDONLY, 777)
-// 	if err != nil {
-// 		panic("Trying to read a DB that has not been initialized")
-// 	}
-
-// 	return csv.NewReader(file)
-// }
 
 func initRowObjects(filesToProcess []string) []*BomRow {
 	rowObjects := make([]*BomRow, 0)
