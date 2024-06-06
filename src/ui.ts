@@ -123,3 +123,9 @@ export const addAudioPlayerIntercepts = () => {
     if (endTime) endTime.innerHTML = formatSeconds(audioFile.duration);
   });
 }
+
+export const safelyCloseAudio = () => {
+  const closer = document.querySelector(CLOSE_PLAYER_BUTTON_SELECTOR);
+  if (!closer) return;
+  closer.dispatchEvent(new Event("click"));
+}
