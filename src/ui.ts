@@ -90,6 +90,10 @@ export const getAudioPlayerButton = (): HTMLDivElement | null => {
   return document.querySelector(AUDIO_PLAYER_BUTTON_SELECTOR);
 }
 
+export const getCloseButton = (): HTMLDivElement | null => {
+  return document.querySelector(CLOSE_PLAYER_BUTTON_SELECTOR);
+}
+
 export const disableAudioPlayerButton = () => {
   getAudioPlayerButton()?.setAttribute("disabled", "true");
 }
@@ -100,11 +104,8 @@ export const enableAudioPlayerButton = () => {
 
 export const addAudioPlayerIntercepts = () => {
   const audioFile = getAudioFile();
-  const audioPlayerButton = getAudioPlayerButton();
-  if (!audioPlayerButton) return;
-  audioPlayerButton.addEventListener("click", async () => {
-    // We assume that once the close button is visible, everything is
-    const closeButton = await waitForEle(CLOSE_PLAYER_BUTTON_SELECTOR);
+  const closeButton = getCloseButton();
+  if (closeButton)
     // When we close the audio player we will have to reapply the intercepts
     closeButton.addEventListener("click", async () => {
       const audioFile = getAudioFile();
@@ -114,13 +115,22 @@ export const addAudioPlayerIntercepts = () => {
       addAudioPlayerIntercepts();
       audioFile.removeEventListener("timeupdate", reflectAudioTimeChanges);
     });
-    // Add the intercept for the playbutton
-    removePlayButtonListeners();
-    addPlayButtonIntercepts();
-    // Listen for time changes
-    audioFile.addEventListener("timeupdate", reflectAudioTimeChanges);
-    const endTime = getEndTime();
-    if (endTime) endTime.innerHTML = formatSeconds(audioFile.duration);
+  // Add the intercept for the playbutton
+  removePlayButtonListeners();
+  addPlayButtonIntercepts();
+  // Listen for time changes
+  audioFile.addEventListener("timeupdate", reflectAudioTimeChanges);
+  const endTime = getEndTime();
+  if (endTime) endTime.innerHTML = formatSeconds(audioFile.duration);
+}
+
+export const addAudioToggleIntercepts = () => {
+  const audioPlayerButton = getAudioPlayerButton();
+  if (!audioPlayerButton) return;
+  audioPlayerButton.addEventListener("click", async () => {
+    // We assume that once the close button is visible, everything is
+    await waitForEle(CLOSE_PLAYER_BUTTON_SELECTOR);
+    addAudioPlayerIntercepts();
   });
 }
 
