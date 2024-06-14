@@ -2,12 +2,15 @@
   "name": "dadbom",
   "module": "index.ts",
   "type": "module",
+  "version": "0.6.9",
   "scripts": {
     "build": "rm -rf dist && mkdir -p dist && cp -r static/* dist && bun build src --outfile=dist/index.js --minify",
+    "build:watch": "nodemon --exec \"bun run build\" --watch src -e .ts,.js,.json",
     "clean": "go run cleaner/clean.go"
   },
   "devDependencies": {
-    "@types/bun": "latest"
+    "@types/bun": "latest",
+    "nodemon": "^3.1.3"
   },
   "peerDependencies": {
     "typescript": "^5.0.0"

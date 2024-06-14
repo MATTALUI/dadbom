@@ -1,6 +1,13 @@
 import { getBOMFileURL } from "./bofm";
 import { getAudioFile, setAudioFile } from "./state";
-import { disableAudioPlayerButton, addAudioToggleIntercepts, getAudioPlayerButton, enableAudioPlayerButton, getCloseButton, addAudioPlayerIntercepts } from "./ui"
+import {
+  disableAudioPlayerButton,
+  addAudioToggleIntercepts,
+  getAudioPlayerButton,
+  enableAudioPlayerButton,
+  getCloseButton,
+  addAudioPlayerIntercepts,
+} from "./ui"
 
 (async () => {
   const initializeDadBOMPlayer = async () => {
