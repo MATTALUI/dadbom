@@ -6,7 +6,10 @@
   "scripts": {
     "build": "rm -rf dist && mkdir -p dist && cp -r static/* dist && bun build src --outfile=dist/index.js --minify",
     "build:watch": "nodemon --exec \"bun run build\" --watch src -e .ts,.js,.json",
-    "clean": "go run cleaner/clean.go"
+    "release": "bun run release:firefox && bun run release:chrome",
+    "release:firefox": "./scripts/release.sh firefox",
+    "release:chrome": "./scripts/release.sh chrome",
+    "clean": "go run scripts/clean.go"
   },
   "devDependencies": {
     "@types/bun": "latest",
