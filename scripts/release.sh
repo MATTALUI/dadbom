@@ -4,4 +4,6 @@ if test -f "$outfile"; then
     echo "This release version already exists locally: $outfile"
     exit 1
 fi
-zip -qq -r $outfile dist
+cd dist
+zip -r "../$outfile" *
+cd ..

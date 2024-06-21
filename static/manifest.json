@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Dad BOM",
-  "version": "1.0",
+  "version": "0.69.0",
   "description": "Allows playback of dad's voice in the LDS Book of Mormon study tools",
   "content_scripts": [
     {
